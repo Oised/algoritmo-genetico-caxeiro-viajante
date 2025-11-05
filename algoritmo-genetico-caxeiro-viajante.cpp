@@ -16,9 +16,10 @@ const int CANVAS_H = 65;        // altura do canvas ASCII (linhas)
 const int CITY_BLOCK = 3;       // cada cidade ocupa CITY_BLOCK x CITY_BLOCK no canvas
 
 // Parametros do "GA" / execucao
-int POP_SIZE = 6;               // tamanho da populacao (padrao pequeno para teste)
-int NUM_GENERATIONS = 5;        // numero de geracoes a executar
-double ELIM_FRACTION = 0.5;     // fracao a eliminar por geracao (ex.: 0.5 elimina metade)
+int POP_SIZE = 50;               // tamanho da populacao (padrao pequeno para teste)
+int NUM_GENERATIONS = 1000;        // numero de geracoes a executar
+double ELIM_FRACTION = 0.1;     // fracao a eliminar por geracao (ex.: 0.5 elimina metade)
+int PRINT_INTERVAL = 100;         // imprime de x em x geracoes (além da 1 e última)
 /* -------------------------------------------------------------------- */
 
 // Gerador de numeros aleatorios (seed com relogio)
@@ -33,10 +34,6 @@ double dist(const Point &a, const Point &b){
     return sqrt(dx*dx + dy*dy);
 }
 
-/*
-  Gera n pontos uniformes no quadrado [0,1]x[0,1], garantindo
-  unicidade pela discretizacao com 'precision'.
-*/
 vector<Point> generate_unique_uniform(int n, int precision = 100) {
     uniform_real_distribution<double> U(0.0, 1.0);
     unordered_set<long long> used;
@@ -51,11 +48,6 @@ vector<Point> generate_unique_uniform(int n, int precision = 100) {
     return pts;
 }
 
-/*
-  Gera n pontos sobre um circulo (benchmark). Os pontos sao criados
-  igualmente espaçados e depois embaralhados levemente para evitar
-  ordenacao trivial.
-*/
 vector<Point> generate_unique_circle(int n, double radius = 0.45, double cx = 0.5, double cy = 0.5) {
     vector<Point> pts;
     pts.reserve(n);
@@ -69,10 +61,6 @@ vector<Point> generate_unique_circle(int n, double radius = 0.45, double cx = 0.
     return pts;
 }
 
-/*
-  Converte coordenadas normalizadas [0,1] para coordenadas do canvas ASCII,
-  mantendo uma margem para que blocos de cidade nao ultrapassem o limite.
-*/
 pair<int,int> map_to_canvas(const Point &p){
     int w = CANVAS_W - CITY_BLOCK - 2;
     int h = CANVAS_H - CITY_BLOCK - 2;
@@ -81,10 +69,6 @@ pair<int,int> map_to_canvas(const Point &p){
     return {cx, cy};
 }
 
-/*
-  Algoritmo de Bresenham para traçar uma linha (inteira) entre dois pontos no canvas.
-  A linha so sobrescreve espacos vazios (' '), preservando blocos de cidade.
-*/
 void draw_line(vector<string> &canvas, int x0, int y0, int x1, int y1, char ch){
     int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
     int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
@@ -101,17 +85,12 @@ void draw_line(vector<string> &canvas, int x0, int y0, int x1, int y1, char ch){
     }
 }
 
-/*
-  Desenha no terminal um mapa ASCII das cidades; opcionalmente desenha uma rota ciclica.
-  Cada cidade e representada por um bloco 'O' e seu indice numerico abaixo.
-*/
 void print_ascii_map(const vector<Point> &pts, const vector<int> &route = {}){
     vector<string> canvas(CANVAS_H, string(CANVAS_W, ' '));
     vector<pair<int,int>> centers;
     centers.reserve(pts.size());
     for (auto &p : pts) centers.push_back(map_to_canvas(p));
 
-    // desenha blocos de cidade
     for (size_t i=0;i<pts.size();++i){
         int cx = centers[i].first;
         int cy = centers[i].second;
@@ -120,12 +99,11 @@ void print_ascii_map(const vector<Point> &pts, const vector<int> &route = {}){
             for (int dx=-half; dx<=half; ++dx){
                 int x = cx + dx;
                 int y = cy + dy;
-                if (x>=0 && x<CANVAS_W && y>=0 && y < CANVAS_H){
+                if (x>=0 && x<CANVAS_W && y>=0 && y<CANVAS_H){
                     canvas[y][x] = 'O';
                 }
             }
         }
-        // indice da cidade sob o bloco (quando cabe)
         string idx = to_string((int)i);
         int px = cx - (int)idx.size()/2;
         int py = cy + half + 1;
@@ -137,7 +115,6 @@ void print_ascii_map(const vector<Point> &pts, const vector<int> &route = {}){
         }
     }
 
-    // se rota fornecida, desenha linhas entre centros e redesenha blocos
     if (!route.empty()){
         for (size_t i=0;i<route.size(); ++i){
             int a = route[i];
@@ -154,7 +131,7 @@ void print_ascii_map(const vector<Point> &pts, const vector<int> &route = {}){
                 for (int dx=-half; dx<=half; ++dx){
                     int x = cx + dx;
                     int y = cy + dy;
-                    if (x>=0 && x<CANVAS_W && y>=0 && y < CANVAS_H){
+                    if (x>=0 && x<CANVAS_W && y>=0 && y<CANVAS_H){
                         canvas[y][x] = 'O';
                     }
                 }
@@ -162,7 +139,6 @@ void print_ascii_map(const vector<Point> &pts, const vector<int> &route = {}){
         }
     }
 
-    // imprimir com moldura
     string topbot = string(CANVAS_W+2, '-');
     cout << topbot << "\n";
     for (int r=0;r<CANVAS_H;++r){
@@ -171,10 +147,6 @@ void print_ascii_map(const vector<Point> &pts, const vector<int> &route = {}){
     cout << topbot << "\n";
 }
 
-/*
-  Gera um individuo aleatorio (permutacao das cidades).
-  Esta funcao e usada temporariamente para repor a populacao apos eliminacao.
-*/
 vector<int> random_individual(int n){
     vector<int> p(n);
     iota(p.begin(), p.end(), 0);
@@ -182,7 +154,6 @@ vector<int> random_individual(int n){
     return p;
 }
 
-/* Calcula o comprimento total de uma rota ciclica (volta a origem). */
 double tour_length(const vector<Point> &pts, const vector<int> &route){
     double s = 0.0;
     for (size_t i=0;i<route.size();++i){
@@ -193,7 +164,6 @@ double tour_length(const vector<Point> &pts, const vector<int> &route){
     return s;
 }
 
-/* Avalia toda a populacao e retorna vector com os comprimentos (mesma ordem). */
 vector<double> evaluate_population(const vector<Point> &pts, const vector<vector<int>> &population){
     vector<double> lengths;
     lengths.reserve(population.size());
@@ -201,7 +171,6 @@ vector<double> evaluate_population(const vector<Point> &pts, const vector<vector
     return lengths;
 }
 
-/* Converte rota para string compacta, usada para impressao. */
 string route_to_string(const vector<int> &route){
     string s = "[";
     for (size_t i=0;i<route.size(); ++i){
@@ -219,12 +188,12 @@ int main(){
 
     cout << fixed << setprecision(3);
 
-    int N = 12; // numero de cidades (>=8)
+    int N = 16;
     cout << "TSP ASCII - demonstracao de selecao\n";
     cout << "Parametros padrao: cidades N=" << N << ", tamanho populacao=" << POP_SIZE
          << ", geracoes=" << NUM_GENERATIONS << ", fracao eliminada=" << ELIM_FRACTION << "\n";
+    cout << "Intervalo de impressao (PRINT_INTERVAL) = " << PRINT_INTERVAL << " (imprime a cada x geracoes, alem da 1 e ultima)\n";
 
-    // prompt para escolher cenario
     cout << "Escolha o cenario: 1 = uniforme aleatorio, 2 = circular (benchmark). Digite 1 ou 2: " << flush;
     int choice = 1;
     cin >> choice;
@@ -243,21 +212,13 @@ int main(){
     cout << "Mapa inicial (sem rota):\n";
     print_ascii_map(pts);
 
-    // cria populacao inicial
     vector<vector<int>> population;
     population.reserve(POP_SIZE);
     for (int i=0;i<POP_SIZE;i++) population.push_back(random_individual(N));
 
-    // loop de selecao por geracoes
     for (int gen=1; gen<=NUM_GENERATIONS; ++gen){
-        cout << "\n" << string(30, '=') << "\n";
-        cout << "GERACAO " << gen << "\n";
-        cout << string(30, '=') << "\n";
-
-        // avalia populacao
         vector<double> lengths = evaluate_population(pts, population);
 
-        // estatisticas e melhor individuo
         double minL = numeric_limits<double>::infinity();
         double maxL = -numeric_limits<double>::infinity();
         double sumL = 0.0;
@@ -270,53 +231,56 @@ int main(){
         }
         double meanL = (lengths.empty() ? 0.0 : sumL / lengths.size());
 
-        // imprime melhor individuo e mapa
-        cout << "Melhor individuo (indice) = " << best_idx << " | comprimento = " << minL << "\n";
-        cout << "Rota do melhor individuo: " << route_to_string(population[best_idx]) << "\n";
-        cout << "Mapa do melhor individuo:\n";
-        print_ascii_map(pts, population[best_idx]);
+        bool should_print = (gen == 1) || (gen == NUM_GENERATIONS) || (PRINT_INTERVAL > 0 && gen % PRINT_INTERVAL == 0);
 
-        // imprime estatisticas
-        cout << "Estatisticas da geracao: MIN = " << minL << " | MAX = " << maxL << " | MEDIA = " << meanL << "\n";
+        if (should_print){
+            cout << "\n" << string(30, '=') << "\n";
+            cout << "GERACAO " << gen << "\n";
+            cout << string(30, '=') << "\n";
 
-        // determina quantos eliminar
+            cout << "Melhor individuo (indice) = " << best_idx << " | comprimento = " << minL << "\n";
+            cout << "Rota do melhor individuo: " << route_to_string(population[best_idx]) << "\n";
+            cout << "Mapa do melhor individuo:\n";
+            print_ascii_map(pts, population[best_idx]);
+
+            cout << "Estatisticas da geracao: MIN = " << minL << " | MAX = " << maxL << " | MEDIA = " << meanL << "\n";
+        }
+
         int elim_count = (int)round(POP_SIZE * ELIM_FRACTION);
         if (elim_count < 1) elim_count = 1;
-        if (elim_count >= POP_SIZE) elim_count = POP_SIZE - 1; // garante pelo menos 1
+        if (elim_count >= POP_SIZE) elim_count = POP_SIZE - 1;
 
-        // ordena indices por fitness (ascendente)
         vector<int> idx(population.size());
         iota(idx.begin(), idx.end(), 0);
         sort(idx.begin(), idx.end(), [&](int a, int b){ return lengths[a] < lengths[b]; });
 
-        // mantem os melhores (POP_SIZE - elim_count)
         int keep = POP_SIZE - elim_count;
         vector<vector<int>> newpop;
         newpop.reserve(POP_SIZE);
         for (int i=0;i<keep;++i) newpop.push_back(population[idx[i]]);
 
-        // relatorio de eliminacao
-        cout << "Eliminando os " << elim_count << " piores individuos desta geracao.\n";
-        cout << "Sobreviventes (indices na populacao anterior): ";
-        for (int i=0;i<keep;++i) cout << idx[i] << (i+1<keep? ", " : "\n");
+        if (should_print){
+            cout << "Eliminando os " << elim_count << " piores individuos desta geracao.\n";
+            cout << "Sobreviventes (indices na populacao anterior): ";
+            for (int i=0;i<keep;++i) cout << idx[i] << (i+1<keep? ", " : "\n");
+        }
 
-        // repoe populacao com individuos aleatorios (temporario)
         int need = POP_SIZE - (int)newpop.size();
         for (int i=0;i<need; ++i) newpop.push_back(random_individual(N));
 
-        // substitui populacao
         population.swap(newpop);
 
-        // sumario rapido apos refill
-        vector<double> lengths_after = evaluate_population(pts, population);
-        cout << "Tamanho da populacao apos reposicao: " << population.size() << " | amostras de comprimentos: ";
-        for (size_t i=0;i<lengths_after.size(); ++i){
-            if (i) cout << ", ";
-            cout << lengths_after[i];
-            if (i >= 9) { cout << ", ..."; break; }
+        if (should_print){
+            vector<double> lengths_after = evaluate_population(pts, population);
+            cout << "Tamanho da populacao apos reposicao: " << population.size() << " | amostras de comprimentos: ";
+            for (size_t i=0;i<lengths_after.size(); ++i){
+                if (i) cout << ", ";
+                cout << lengths_after[i];
+                if (i >= 9) { cout << ", ..."; break; }
+            }
+            cout << "\n";
         }
-        cout << "\n";
-    } // fim geracoes
+    }
 
     cout << "\nDemonstracao de selecao concluida.\n";
     cout << "Proximos passos: substituir reposicao aleatoria por crossover e mutacao,\n"
