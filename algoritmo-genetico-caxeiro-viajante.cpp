@@ -2,40 +2,44 @@
 using namespace std;
 
 /*
-  Algoritmo Genético - TSP ASCII (versão com crossover e elitismo)
-  - Mantém população fixa (POP_SIZE)
-  - Elitismo parcial (mantém ELITISM_RATE dos melhores)
-  - Seleção linear por rank
-  - Crossover OX (Order Crossover)
-  - Mutação adaptativa (mesma do código original)
+  Algoritmo Genetico - TSP ASCII
+  Implementacao:
+  - populacao fixa
+  - elitismo parcial
+  - selecao por rank (peso linear)
+  - crossover Order Crossover (OX)
+  - mutacao por swap adaptativa (dependente do rank)
+  - exibicao ASCII do mapa e da melhor rota
 */
 
-/* ------------------ PARÂMETROS ------------------ */
-const int CANVAS_W = 140;
-const int CANVAS_H = 65;
-const int CITY_BLOCK = 3;
+/* ------------------ PARAMETROS ------------------ */
+const int CANVAS_W = 200;
+const int CANVAS_H = 100;
+const int CITY_BLOCK = 1;
 
-int POP_SIZE = 16;               // tamanho da população
-int NUM_GENERATIONS = 2147483647; // número máximo de gerações
-int PRINT_INTERVAL = 10;          // imprime a cada x gerações
-double MUT_RANGE = 0.40;          // mutação máxima (pior indivíduo)
-int MUTATIONS_PER_GEN = 12;       // mutações por geração
-double ELITISM_RATE = 0.10;       // fração de elite mantida (0..1)
-double CROSSOVER_RATE = 0.8;      // probabilidade de aplicar crossover
-int MAX_STAGNATION = 60;         // gerações sem melhora para parar
+int pop_size = 100;
+int max_generations = 2147483647;
+int print_interval = 20;
+double mut_range = 0.55;
+int mutations_per_gen = 16;
+double elitism_rate = 0.10;
+double crossover_rate = 0.8;
+int max_stagnation = 300;
 /* ------------------------------------------------ */
 
 static std::mt19937 rng((unsigned)chrono::high_resolution_clock::now().time_since_epoch().count());
 
 struct Point { double x, y; };
 
-double dist(const Point &a, const Point &b){
+/* Calcula distancia euclidiana entre dois pontos */
+double distance_euclid(const Point &a, const Point &b){
     double dx = a.x - b.x, dy = a.y - b.y;
     return sqrt(dx*dx + dy*dy);
 }
 
-/* ----------- Geração de pontos ----------- */
-vector<Point> generate_unique_uniform(int n, int precision = 100) {
+/* ----------- Geracao de pontos ----------- */
+/* Gera n pontos uniformes (garante unicidade discreta com 'precision') */
+vector<Point> gen_uniform_points(int n, int precision = 100) {
     uniform_real_distribution<double> U(0.0, 1.0);
     unordered_set<long long> used;
     vector<Point> pts; pts.reserve(n);
@@ -48,7 +52,8 @@ vector<Point> generate_unique_uniform(int n, int precision = 100) {
     return pts;
 }
 
-vector<Point> generate_unique_circle(int n, double radius = 0.45, double cx = 0.5, double cy = 0.5) {
+/* Gera n pontos distribuídos sobre um circulo e embaralha a ordem */
+vector<Point> gen_circle_points(int n, double radius = 0.45, double cx = 0.5, double cy = 0.5) {
     vector<Point> pts; pts.reserve(n);
     for (int i=0;i<n;i++){
         double theta = 2.0 * M_PI * i / n;
@@ -58,8 +63,8 @@ vector<Point> generate_unique_circle(int n, double radius = 0.45, double cx = 0.
     return pts;
 }
 
-/* ----------- Funções auxiliares ----------- */
-pair<int,int> map_to_canvas(const Point &p){
+/* ----------- Funcoes auxiliares de desenho ASCII ----------- */
+pair<int,int> to_canvas_coords(const Point &p){
     int w = CANVAS_W - CITY_BLOCK - 2, h = CANVAS_H - CITY_BLOCK - 2;
     int cx = 1 + (int)round(p.x * w);
     int cy = 1 + (int)round(p.y * h);
@@ -81,10 +86,11 @@ void draw_line(vector<string> &canvas, int x0, int y0, int x1, int y1, char ch){
     }
 }
 
+/* Imprime mapa ASCII com pontos; se 'route' fornecido desenha as ligacoes */
 void print_ascii_map(const vector<Point> &pts, const vector<int> &route = {}){
     vector<string> canvas(CANVAS_H, string(CANVAS_W, ' '));
     vector<pair<int,int>> centers; centers.reserve(pts.size());
-    for (auto &p : pts) centers.push_back(map_to_canvas(p));
+    for (auto &p : pts) centers.push_back(to_canvas_coords(p));
 
     for (size_t i=0;i<pts.size();++i){
         int cx = centers[i].first, cy = centers[i].second, half = CITY_BLOCK/2;
@@ -112,7 +118,7 @@ void print_ascii_map(const vector<Point> &pts, const vector<int> &route = {}){
             for (int dy=-half; dy<=half; ++dy)
                 for (int dx=-half; dx<=half; ++dx){
                     int x = cx + dx, y = cy + dy;
-                    if (x>=0 && x<CANVAS_W && y>=0 && y < CANVAS_H) canvas[y][x] = 'O';
+                    if (x>=0 && x<CANVAS_W && y>=0 && y < CANVAS_H) canvas[y][x] = 219;
                 }
         }
     }
@@ -123,47 +129,52 @@ void print_ascii_map(const vector<Point> &pts, const vector<int> &route = {}){
     cout << topbot << "\n";
 }
 
-/* ----------- GA utilities ----------- */
-vector<int> random_individual(int n){
+/* ----------- Utilitarios do GA ----------- */
+/* Cria um individuo aleatorio (permutacao 0..n-1) */
+vector<int> create_random_individual(int n){
     vector<int> p(n); iota(p.begin(), p.end(), 0);
     shuffle(p.begin(), p.end(), rng); return p;
 }
 
-double tour_length(const vector<Point> &pts, const vector<int> &route){
+/* Computa o comprimento total de um tour ciclico */
+double compute_tour_length(const vector<Point> &pts, const vector<int> &route){
     double s = 0.0;
     for (size_t i=0;i<route.size();++i)
-        s += dist(pts[route[i]], pts[route[(i+1)%route.size()]]);
+        s += distance_euclid(pts[route[i]], pts[route[(i+1)%route.size()]]);
     return s;
 }
 
-vector<double> evaluate_population(const vector<Point> &pts, const vector<vector<int>> &pop){
-    vector<double> l; l.reserve(pop.size());
-    for (auto &ind : pop) l.push_back(tour_length(pts, ind));
-    return l;
+/* Avalia toda a populacao retornando vector de comprimentos */
+vector<double> evaluate_population_lengths(const vector<Point> &pts, const vector<vector<int>> &population){
+    vector<double> lengths; lengths.reserve(population.size());
+    for (auto &ind : population) lengths.push_back(compute_tour_length(pts, ind));
+    return lengths;
 }
 
-/* ----------- Mutação ----------- */
+/* ----------- Mutacao ----------- */
+/* Executa um swap simples entre duas posicoes aleatorias */
 void swap_mutation_once(vector<int> &ind, uniform_int_distribution<int> &dist_pos){
     int i = dist_pos(rng), j = dist_pos(rng);
     while (j == i) j = dist_pos(rng);
     swap(ind[i], ind[j]);
 }
 
-void apply_mutations(vector<vector<int>> &pop, const vector<int> &rank_of,
-                     int mutations_per_gen, int max_swaps_per_call, double mut_range){
-    int P = (int)pop.size();
+/* Aplica mutacoes adaptativas baseadas no rank do individuo */
+void apply_adaptive_mutations(vector<vector<int>> &population, const vector<int> &rank_of,
+                     int mutations_per_generation, int max_swaps_per_call, double mutation_range){
+    int P = (int)population.size();
     uniform_int_distribution<int> pick_ind(0, P - 1);
-    uniform_int_distribution<int> dist_pos(0, (int)pop[0].size()-1);
+    uniform_int_distribution<int> dist_pos(0, (int)population[0].size()-1);
     uniform_real_distribution<double> U(0.0, 1.0);
 
-    for (int m = 0; m < mutations_per_gen; ++m){
+    for (int m = 0; m < mutations_per_generation; ++m){
         int idx = pick_ind(rng);
         int rank = rank_of[idx];
         double rank_norm = (P > 1) ? (double)rank / (double)(P - 1) : 0.0;
-        double p_mut = rank_norm * mut_range;
+        double p_mut = rank_norm * mutation_range;
         int attempts = 1 + (int)floor(rank_norm * (double)max_swaps_per_call);
         for (int a = 0; a < attempts; ++a)
-            if (U(rng) < p_mut) swap_mutation_once(pop[idx], dist_pos);
+            if (U(rng) < p_mut) swap_mutation_once(population[idx], dist_pos);
     }
 }
 
@@ -189,98 +200,121 @@ vector<int> order_crossover(const vector<int> &p1, const vector<int> &p2){
     return child;
 }
 
-/* ----------- Seleção linear por rank ----------- */
-int select_parent(const vector<int> &rank_sorted){
-    int P = rank_sorted.size();
-    vector<double> weights(P);
-    for (int i=0;i<P;i++) weights[i] = (double)(P - i);
-    discrete_distribution<int> dist(weights.begin(), weights.end());
-    return rank_sorted[dist(rng)];
-}
-
-/* ----------- MAIN ----------- */
+/* ----------- PROGRAMA PRINCIPAL ----------- */
 int main(){
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
     cout << fixed << setprecision(3);
 
-    int N = 16;
+    int N = 32;
     cout << "TSP ASCII - GA com elitismo e crossover OX\n";
-    cout << "Parametros: N=" << N << " | POP=" << POP_SIZE << " | GERACOES=" << NUM_GENERATIONS << "\n";
-    cout << "ELITISMO=" << ELITISM_RATE << " | CROSSOVER=" << CROSSOVER_RATE
-         << " | MUT_RANGE=" << MUT_RANGE << " | MUT_PGEN=" << MUTATIONS_PER_GEN
-         << " | ESTAGNACAO=" << MAX_STAGNATION << "\n";
+    cout << "Parametros: N=" << N << " | POP=" << pop_size << " | GERACOES=" << max_generations << "\n";
+    cout << "ELITISMO=" << elitism_rate << " | CROSSOVER=" << crossover_rate
+         << " | MUT_RANGE=" << mut_range << " | MUT_PGEN=" << mutations_per_gen
+         << " | ESTAGNACAO=" << max_stagnation << "\n";
 
     cout << "Escolha o cenario: 1 = uniforme aleatorio, 2 = circular: " << flush;
     int choice = 1;
     if (!(cin >> choice)) choice = 1;
     cout << "\n";
 
-    vector<Point> pts = (choice == 2) ? generate_unique_circle(N) : generate_unique_uniform(N, 200);
+    vector<Point> points = (choice == 2) ? gen_circle_points(N) : gen_uniform_points(N, 200);
 
     cout << "Mapa inicial (sem rota):\n";
-    print_ascii_map(pts);
+    print_ascii_map(points);
 
-    vector<vector<int>> pop;
-    for (int i=0;i<POP_SIZE;i++) pop.push_back(random_individual(N));
+    vector<vector<int>> population;
+    for (int i=0;i<pop_size;i++) population.push_back(create_random_individual(N));
 
-    int max_swaps_per_call = max(1, POP_SIZE / 10);
+    int max_swaps_per_call = max(1, pop_size / 10);
 
     double best_global = numeric_limits<double>::infinity();
     int stagnant = 0;
 
-    for (int gen=1; gen<=NUM_GENERATIONS; ++gen){
-        vector<double> L = evaluate_population(pts, pop);
-        vector<int> idx(POP_SIZE); iota(idx.begin(), idx.end(), 0);
-        sort(idx.begin(), idx.end(), [&](int a, int b){ return L[a] < L[b]; });
+    // controla quando o mapa foi impresso por ultimo (somente atualizar quando mapa for mostrado)
+    double last_printed_best = numeric_limits<double>::infinity();
 
-        double bestL = L[idx[0]], worstL = L[idx.back()], meanL = accumulate(L.begin(), L.end(), 0.0) / L.size();
+    for (int gen=1; gen<=max_generations; ++gen){
+        vector<double> lengths = evaluate_population_lengths(points, population);
+        vector<int> order(pop_size); iota(order.begin(), order.end(), 0);
+        sort(order.begin(), order.end(), [&](int a, int b){ return lengths[a] < lengths[b]; });
 
-        // critério de estagnação
-        if (bestL + 1e-9 < best_global) {
-            best_global = bestL;
+        double best_len = lengths[order[0]], worst_len = lengths[order.back()];
+        double mean_len = accumulate(lengths.begin(), lengths.end(), 0.0) / lengths.size();
+
+        if (best_len + 1e-9 < best_global) {
+            best_global = best_len;
             stagnant = 0;
-        } else {
-            stagnant++;
-        }
+        } else stagnant++;
 
-        bool show = (gen==1) || (gen==NUM_GENERATIONS) || (PRINT_INTERVAL && gen%PRINT_INTERVAL==0);
+        bool show = (gen==1) || (gen==max_generations) || (print_interval && gen%print_interval==0);
+
         if (show){
+            // decide se printar o mapa ou apenas uma mensagem curta
+            bool print_map = false;
+            if (last_printed_best == numeric_limits<double>::infinity()){
+                // forca primeiro print
+                print_map = true;
+            } else {
+                // tolerancia relativa baseada no ultimo melhor impresso
+                double eps = 1e-6 * max(1.0, last_printed_best);
+                if (best_len + eps < last_printed_best) print_map = true;
+            }
+
             cout << "\n========== GERACAO " << gen << " ==========\n";
-            cout << "Melhor rota (idx " << idx[0] << ") = " << bestL << "\n";
-            cout << "Mapa do melhor:\n"; print_ascii_map(pts, pop[idx[0]]);
-            cout << "MIN=" << bestL << " | MAX=" << worstL << " | MEDIA=" << meanL
-                 << " | ESTAG=" << stagnant << "/" << MAX_STAGNATION << "\n";
+            cout << "Melhor rota (idx " << order[0] << ") = " << best_len << "\n";
+
+            if (print_map){
+                cout << "Mapa do melhor:\n";
+                print_ascii_map(points, population[order[0]]);
+                // atualiza marcador do ultimo print (so aqui, quando efetivamente mostramos o mapa)
+                last_printed_best = best_len;
+            } else {
+                // exibicao curta: apenas informa que o mapa foi suprimido por falta de melhora
+                cout << "Mapa suprimido - sem melhora significativa desde a ultima exibicao (melhor = "
+                     << last_printed_best << ")\n";
+            }
+
+            // estatisticas numericas (sempre mostram, evitam duplicacao)
+            cout << "MIN=" << best_len << " | MAX=" << worst_len << " | MEDIA=" << mean_len
+                 << " | ESTAG=" << stagnant << "/" << max_stagnation << "\n";
         }
 
-        if (stagnant >= MAX_STAGNATION) {
-            cout << "\nCritério de parada: estagnação por " << MAX_STAGNATION << " gerações.\n";
+        if (stagnant >= max_stagnation) {
+            cout << "\nCriterio de parada: estagnacao por " << max_stagnation << " geracoes.\n";
             break;
         }
 
-        /* ----------- GERA NOVA POPULAÇÃO ----------- */
-        vector<vector<int>> new_pop;
-        int num_elite = max(1, (int)(POP_SIZE * ELITISM_RATE));
-        for (int i=0;i<num_elite;i++) new_pop.push_back(pop[idx[i]]);
+        /* ----------- GERA NOVA POPULACAO ----------- */
+        vector<vector<int>> new_population;
+        int num_elite = max(1, (int)(pop_size * elitism_rate));
+        for (int i=0;i<num_elite;i++) new_population.push_back(population[order[i]]);
 
+        vector<double> weights(pop_size);
+        for (int i=0;i<pop_size;i++) weights[i] = (double)(pop_size - i);
+        discrete_distribution<int> parent_dist(weights.begin(), weights.end());
         uniform_real_distribution<double> U(0.0, 1.0);
-        while ((int)new_pop.size() < POP_SIZE){
-            int p1 = select_parent(idx);
-            int p2 = select_parent(idx);
-            if (U(rng) < CROSSOVER_RATE){
-                vector<int> child = order_crossover(pop[p1], pop[p2]);
-                new_pop.push_back(child);
+
+        while ((int)new_population.size() < pop_size){
+            int p1 = order[parent_dist(rng)];
+            int p2 = order[parent_dist(rng)];
+            if (U(rng) < crossover_rate){
+                new_population.push_back(order_crossover(population[p1], population[p2]));
             } else {
-                new_pop.push_back(pop[p1]);
+                new_population.push_back(population[p1]);
             }
         }
 
-        // aplica mutação adaptativa
-        vector<int> rank_of(POP_SIZE);
-        for (int r=0;r<POP_SIZE;r++) rank_of[idx[r]] = r;
-        apply_mutations(new_pop, rank_of, MUTATIONS_PER_GEN, max_swaps_per_call, MUT_RANGE);
+        population = move(new_population);
 
-        pop = std::move(new_pop);
+        // reavalia a populacao atual e cria ranking antes de aplicar mutacoes
+        lengths = evaluate_population_lengths(points, population);
+        iota(order.begin(), order.end(), 0);
+        sort(order.begin(), order.end(), [&](int a, int b){ return lengths[a] < lengths[b]; });
+
+        vector<int> rank_of(pop_size);
+        for (int r=0;r<pop_size;r++) rank_of[order[r]] = r;
+        apply_adaptive_mutations(population, rank_of, mutations_per_gen, max_swaps_per_call, mut_range);
     }
 
     cout << "\nEvolucao concluida com elitismo e crossover.\n";
