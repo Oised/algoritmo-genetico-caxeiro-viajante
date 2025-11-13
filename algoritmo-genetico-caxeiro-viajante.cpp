@@ -8,7 +8,7 @@ using namespace std;
   - elitismo parcial
   - selecao por rank (peso linear)
   - crossover Order Crossover (OX)
-  - mutacao por swap adaptativa (dependente do rank)
+  - mutacao por swap adaptativa (deterministica por individuo)
   - exibicao ASCII do mapa e da melhor rota
 */
 
@@ -19,12 +19,12 @@ const int CITY_BLOCK = 1;
 
 int pop_size = 100;
 int max_generations = 2147483647;
-int print_interval = 20;
-double mut_range = 0.55;
-int mutations_per_gen = 16;
-double elitism_rate = 0.10;
+int print_interval = 30;
+double mut_range = 0.60;
+int mutations_per_gen = 16; // controla quantas passagens completas sobre a populacao
+double elitism_rate = 0.05;
 double crossover_rate = 0.8;
-int max_stagnation = 300;
+int max_stagnation = 500;
 /* ------------------------------------------------ */
 
 static std::mt19937 rng((unsigned)chrono::high_resolution_clock::now().time_since_epoch().count());
@@ -151,7 +151,7 @@ vector<double> evaluate_population_lengths(const vector<Point> &pts, const vecto
     return lengths;
 }
 
-/* ----------- Mutacao ----------- */
+/* ----------- Mutacao (swap) ----------- */
 /* Executa um swap simples entre duas posicoes aleatorias */
 void swap_mutation_once(vector<int> &ind, uniform_int_distribution<int> &dist_pos){
     int i = dist_pos(rng), j = dist_pos(rng);
@@ -159,22 +159,30 @@ void swap_mutation_once(vector<int> &ind, uniform_int_distribution<int> &dist_po
     swap(ind[i], ind[j]);
 }
 
-/* Aplica mutacoes adaptativas baseadas no rank do individuo */
-void apply_adaptive_mutations(vector<vector<int>> &population, const vector<int> &rank_of,
-                     int mutations_per_generation, int max_swaps_per_call, double mutation_range){
+/*
+  Aplica mutacoes deterministicas:
+  - 'mut_passes' indica quantas vezes iteramos por todos os individuos.
+  - em cada passagem, para cada individuo calcula-se p_mut = rank_norm * mut_range.
+  - 'max_swaps_per_call' define o numero maximo de swaps possiveis (controla agressividade).
+  - Esta estrategia garante que todos os individuos sao testados em cada passagem.
+*/
+void apply_adaptive_mutations_deterministic(vector<vector<int>> &population, const vector<int> &rank_of,
+                     int mut_passes, int max_swaps_per_call, double mutation_range){
     int P = (int)population.size();
-    uniform_int_distribution<int> pick_ind(0, P - 1);
     uniform_int_distribution<int> dist_pos(0, (int)population[0].size()-1);
     uniform_real_distribution<double> U(0.0, 1.0);
 
-    for (int m = 0; m < mutations_per_generation; ++m){
-        int idx = pick_ind(rng);
-        int rank = rank_of[idx];
-        double rank_norm = (P > 1) ? (double)rank / (double)(P - 1) : 0.0;
-        double p_mut = rank_norm * mutation_range;
-        int attempts = 1 + (int)floor(rank_norm * (double)max_swaps_per_call);
-        for (int a = 0; a < attempts; ++a)
-            if (U(rng) < p_mut) swap_mutation_once(population[idx], dist_pos);
+    // mut_passes vezes percorremos toda a populacao, aplicando a probabilidade de mutacao a cada individuo
+    for (int pass = 0; pass < mut_passes; ++pass){
+        for (int idx = 0; idx < P; ++idx){
+            int rank = rank_of[idx];
+            double rank_norm = (P > 1) ? (double)rank / (double)(P - 1) : 0.0;
+            double p_mut = rank_norm * mutation_range;
+            int attempts = 1 + (int)floor(rank_norm * (double)max_swaps_per_call);
+            for (int a = 0; a < attempts; ++a){
+                if (U(rng) < p_mut) swap_mutation_once(population[idx], dist_pos);
+            }
+        }
     }
 }
 
@@ -295,9 +303,14 @@ int main(){
         discrete_distribution<int> parent_dist(weights.begin(), weights.end());
         uniform_real_distribution<double> U(0.0, 1.0);
 
+        // pre-seleciona indices em termos do vetor 'order'; garante que p1 != p2 ao gerar filhos
         while ((int)new_population.size() < pop_size){
-            int p1 = order[parent_dist(rng)];
-            int p2 = order[parent_dist(rng)];
+            int idx1 = parent_dist(rng);
+            int idx2 = parent_dist(rng);
+            while (idx2 == idx1) idx2 = parent_dist(rng); // garante pais distintos
+            int p1 = order[idx1];
+            int p2 = order[idx2];
+
             if (U(rng) < crossover_rate){
                 new_population.push_back(order_crossover(population[p1], population[p2]));
             } else {
@@ -314,7 +327,9 @@ int main(){
 
         vector<int> rank_of(pop_size);
         for (int r=0;r<pop_size;r++) rank_of[order[r]] = r;
-        apply_adaptive_mutations(population, rank_of, mutations_per_gen, max_swaps_per_call, mut_range);
+
+        // aplica mutacoes: agora deterministica (percorre toda populacao 'mutations_per_gen' vezes)
+        apply_adaptive_mutations_deterministic(population, rank_of, mutations_per_gen, max_swaps_per_call, mut_range);
     }
 
     cout << "\nEvolucao concluida com elitismo e crossover.\n";
